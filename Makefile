@@ -302,8 +302,8 @@ endif
 images/input:
 	mkdir -p $@
 
-deploy_images: images/sequences.tar.gz | images/input
-	tar xf $< --strip-components=1 -C $|
+deploy_images: images/images.tar.gz | images/input
+	tar xf $< -C $|
 
 clean_images:
 	rm -rf images/input
