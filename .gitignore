@@ -1,0 +1,5 @@
+*.o
+*.x
+.vscode
+deps
+boxed_*
