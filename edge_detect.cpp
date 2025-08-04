@@ -5,6 +5,8 @@
 #pragma warning(disable : 4819)
 #endif
 
+#include <string.h>
+
 #include <iostream>
 #include <fstream>
 #include <optional>
@@ -73,7 +75,9 @@ int cudaDeviceInit()
 void initNPPLib(NppStreamContext &nppStreamCtx)
 {
 
-    nppStreamCtx.hStream = 0; // The NULL stream by default, set this to whatever your stream ID is if not the NULL stream.
+    cudaStream_t streams;
+    CHECK_CUDA_ERR(cudaStreamCreate(&streams));
+    nppStreamCtx.hStream = streams; // The NULL stream by default, set this to whatever your stream ID is if not the NULL stream.
 
     CHECK_CUDA_ERR(cudaGetDevice(&nppStreamCtx.nCudaDeviceId));
 
@@ -100,68 +104,110 @@ void initNPPLib(NppStreamContext &nppStreamCtx)
     nppStreamCtx.nSharedMemPerBlock = oDeviceProperties.sharedMemPerBlock;
 }
 
-void processImage(NppStreamContext &nppStreamCtx, const std::string &input, const std::string &output) {
+void closeNPPLib(NppStreamContext &nppStreamCtx)
+{
+    if (nppStreamCtx.hStream != 0) {
+        CHECK_CUDA_ERR(cudaStreamDestroy(nppStreamCtx.hStream));
+        nppStreamCtx.hStream = 0;
+    }
+}
 
-    // declare a host image object for an 8-bit grayscale image
+struct ImageProcessData
+{
+    NppStreamContext nppStreamCtx;
     npp::ImageCPU_8u_C1 oHostSrc;
-    // load gray-scale image from disk
-    npp::loadImage(input, oHostSrc);
+    npp::ImageNPP_8u_C1 oDeviceSrc;
+    npp::ImageNPP_8u_C1 oDeviceDst;
+    NppiSize oSizeROI;
+    int nBufferSize = 0;
+    Npp8u *pScratchBufferNPP = nullptr;
+    npp::ImageCPU_8u_C1 oHostDst;
+
+    ~ImageProcessData() {
+        if (pScratchBufferNPP != nullptr) {
+            CHECK_CUDA_ERR(cudaFree(pScratchBufferNPP));
+        }
+    }
+};
+
+void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, const Npp8u *pSrc, size_t nSrcPitch, size_t nWidth, size_t nHeight, cudaStream_t stream)
+{
+    CHECK_CUDA_ERR(cudaMemcpy2DAsync(pDst, nDstPitch, pSrc, nSrcPitch, nWidth * sizeof(Npp8u), nHeight, cudaMemcpyDeviceToHost, stream));
+};
+
+void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, npp::ImageNPP_8u_C1 &oDeviceSrc, cudaStream_t stream)
+{
+    DeviceToHostCopy2DAsync(pDst, nDstPitch, oDeviceSrc.data(), oDeviceSrc.pitch(), oDeviceSrc.width(), oDeviceSrc.height(), stream);
+}
+
+void initData(ImageProcessData &data, const std::string &input) {
+    npp::loadImage(input, data.oHostSrc);
     // declare a device image and copy construct from the host image,
     // i.e. upload host to device
-    npp::ImageNPP_8u_C1 oDeviceSrc(oHostSrc);
+    data.oDeviceSrc = npp::ImageNPP_8u_C1(data.oHostSrc);
 
-    NppiSize oSrcSize = {(int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
-    NppiPoint oSrcOffset = {0, 0};
+    // allocate device image of appropriately reduced size
+    data.oDeviceDst = npp::ImageNPP_8u_C1((int)data.oDeviceSrc.width(), (int)data.oDeviceSrc.height());
+    // declare a host image for the result
+    data.oHostDst = npp::ImageCPU_8u_C1(data.oDeviceDst.size());
+
+    std::cout << "image is " << data.oDeviceSrc.width() << 'x' << (int)data.oDeviceSrc.height()
+              << " pitch is " << data.oDeviceSrc.pitch() << std::endl;
 
     // create struct with ROI size
-    NppiSize oSizeROI = {(int)oDeviceSrc.width(), (int)oDeviceSrc.height()};
-    // allocate device image of appropriately reduced size
-    npp::ImageNPP_8u_C1 oDeviceDst(oSizeROI.width, oSizeROI.height);
+    data.oSizeROI = {(int)data.oDeviceSrc.width(), (int)data.oDeviceSrc.height()};
+}
 
-    int nBufferSize = 0;
-    Npp8u *pScratchBufferNPP = 0;
-
+void computeData(ImageProcessData &data) {
     // get necessary scratch buffer size and allocate that much device memory
-    CHECK_NPP_ERR(nppiFilterCannyBorderGetBufferSize(oSizeROI, &nBufferSize));
+    int old_size = data.nBufferSize, new_size;
+    CHECK_NPP_ERR(nppiFilterCannyBorderGetBufferSize(data.oSizeROI, &new_size));
 
-    cudaMalloc((void **)&pScratchBufferNPP, nBufferSize);
-
-    // now run the canny edge detection filter
-    // Using nppiNormL2 will produce larger magnitude values allowing for finer
-    // control of threshold values while nppiNormL1 will be slightly faster.
-    // Also, selecting the sobel gradient filter allows up to a 5x5 kernel size
-    // which can produce more precise results but is a bit slower. Commonly
-    // nppiNormL2 and sobel gradient filter size of 3x3 are used. Canny
-    // recommends that the high threshold value should be about 3 times the low
-    // threshold value. The threshold range will depend on the range of
-    // magnitude values that the sobel gradient filter generates for a
-    // particular image.
-
-    Npp16s nLowThreshold = 72;
-    Npp16s nHighThreshold = 256;
-
-    if ((nBufferSize > 0) && (pScratchBufferNPP != 0))
+    if (old_size < new_size)
     {
-        CHECK_NPP_ERR(nppiFilterCannyBorder_8u_C1R_Ctx(
-            oDeviceSrc.data(), oDeviceSrc.pitch(), oSrcSize, oSrcOffset,
-            oDeviceDst.data(), oDeviceDst.pitch(), oSizeROI, NPP_FILTER_SOBEL,
-            NPP_MASK_SIZE_3_X_3, nLowThreshold, nHighThreshold, nppiNormL2,
-            NPP_BORDER_REPLICATE, pScratchBufferNPP, nppStreamCtx));
+        if (old_size > 0) {
+            CHECK_CUDA_ERR(cudaFreeAsync(data.pScratchBufferNPP, data.nppStreamCtx.hStream));
+        }
+        data.nBufferSize = new_size;
+        CHECK_CUDA_ERR(cudaMallocAsync((void **)&data.pScratchBufferNPP, new_size, data.nppStreamCtx.hStream));
     }
 
-    // free scratch buffer memory
-    cudaFree(pScratchBufferNPP);
+    NppiSize oSrcSize = {(int)data.oDeviceSrc.width(), (int)data.oDeviceSrc.height()};
+    NppiPoint oSrcOffset = {0, 0};
 
-    // declare a host image for the result
-    npp::ImageCPU_8u_C1 oHostDst(oDeviceDst.size());
+    const Npp16s nLowThreshold = 72;
+    const Npp16s nHighThreshold = 256;
+
+    if ((data.nBufferSize > 0) && (data.pScratchBufferNPP != nullptr))
+    {
+        CHECK_NPP_ERR(nppiFilterCannyBorder_8u_C1R_Ctx(
+            data.oDeviceSrc.data(), data.oDeviceSrc.pitch(), oSrcSize, oSrcOffset,
+            data.oDeviceDst.data(), data.oDeviceDst.pitch(), data.oSizeROI, NPP_FILTER_SOBEL,
+            NPP_MASK_SIZE_3_X_3, nLowThreshold, nHighThreshold, nppiNormL2,
+            NPP_BORDER_REPLICATE, data.pScratchBufferNPP, data.nppStreamCtx));
+    }
+
     // and copy the device result data into it
-    oDeviceDst.copyTo(oHostDst.data(), oHostDst.pitch());
+    DeviceToHostCopy2DAsync(data.oHostDst.data(), data.oHostDst.pitch(), data.oDeviceDst, data.nppStreamCtx.hStream);
+}
 
-    saveImage(output, oHostDst);
+void outputData(ImageProcessData &data, const std::string &output)
+{
+    CHECK_CUDA_ERR(cudaStreamSynchronize(data.nppStreamCtx.hStream));
+    saveImage(output, data.oHostDst);
     std::cout << "Saved image: " << output << std::endl;
+}
 
-    nppiFree(oDeviceSrc.data());
-    nppiFree(oDeviceDst.data());
+
+void processImage(NppStreamContext & nppStreamCtx, const std::string &input, const std::string &output)
+{
+    ImageProcessData data;
+    data.nppStreamCtx = nppStreamCtx;
+
+    initData(data, input);
+    computeData(data);
+    outputData(data, output);
+
 }
 
 int main(int argc, char *argv[])
@@ -170,10 +216,7 @@ int main(int argc, char *argv[])
 
     printf("%s Starting...\n\n", argv[0]);
 
-    try {
-        std::string sFilename, output;
-        char       *filePath;
-
+        try {
         cudaDeviceInit();
         NppStreamContext nppStreamCtx;
         initNPPLib(nppStreamCtx);
@@ -194,6 +237,7 @@ int main(int argc, char *argv[])
                             << "outfile " << outfile << std::endl;
 
         processImage(nppStreamCtx, infile, outfile);
+        closeNPPLib(nppStreamCtx);
     }
     catch (npp::Exception &rException) {
         std::cerr << "Program error! An NPP exception occurred: \n";

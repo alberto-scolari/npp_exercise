@@ -268,9 +268,9 @@ GENCODE_FLAGS += -gencode arch=compute_$(HIGHEST_SM),code=compute_$(HIGHEST_SM)
 endif
 endif
 
-ALL_CCFLAGS += --threads 0
+ALL_CCFLAGS += --threads 0  -Xcompiler -Wall -Xcompiler -Wextra
 
-INCLUDES += -I../Common/UtilNPP
+INCLUDES += -isystem ../Common/UtilNPP
 
 LIBRARIES += -lnppisu_static -lnppif_static -lnppc_static -lculibos -lfreeimage
 
