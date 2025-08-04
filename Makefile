@@ -296,12 +296,24 @@ else
 	@echo "Sample is ready - all dependencies have been met"
 endif
 
+
+.PHONY: deploy_images clean_images clean
+
+images/input:
+	mkdir -p $@
+
+deploy_images: images/sequences.tar.gz | images/input
+	tar xf $< --strip-components=1 -C $|
+
+clean_images:
+	rm -rf images/input
+
 appname := edge_detect.x
 sources := edge_detect.cpp
 objs := $(sources:.cpp=.o)
 
 deps/argparse/argparse:
-	mkdir -p deps/argparse/argparse
+	mkdir -p $@
 
 INCLUDES += -Ideps/argparse/
 
@@ -322,5 +334,3 @@ test: build
 
 clean:
 	rm -f $(appname) $(objs)
-
-clobber: clean
