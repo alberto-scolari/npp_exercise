@@ -12,6 +12,8 @@
 #include <optional>
 #include <string>
 #include <filesystem>
+#include <functional>
+#include <vector>
 
 #include <argparse/argparse.hpp>
 
@@ -198,45 +200,63 @@ void outputData(ImageProcessData &data, const std::string &output)
     std::cout << "Saved image: " << output << std::endl;
 }
 
-
-void processImage(NppStreamContext & nppStreamCtx, const std::string &input, const std::string &output)
+void processImage(ImageProcessData &data, const std::string &input, const std::string &output)
 {
-    ImageProcessData data;
-    data.nppStreamCtx = nppStreamCtx;
-
     initData(data, input);
     computeData(data);
     outputData(data, output);
-
 }
 
 int main(int argc, char *argv[])
 {
     using path_t = std::filesystem::path;
+    //using dirent_t = std::filesystem::directory_entry;
+    using diriter_t = std::filesystem::directory_iterator;
 
     printf("%s Starting...\n\n", argv[0]);
 
-        try {
+    try
+    {
         cudaDeviceInit();
         NppStreamContext nppStreamCtx;
         initNPPLib(nppStreamCtx);
 
         argparse::ArgumentParser program("edge_detect");
-        program.add_argument("input")
-            .help("input file or directory (automatically detected)");
         program.add_argument("-o")
             .default_value(".")
             .help("output file or directory (depending on input)");
-
+        program.add_argument("--dir")
+            .help("input is a directory")
+            .default_value(false)
+            .implicit_value(true);
+        program.add_argument("input")
+            .help("input file or directory (automatically detected)");
         program.parse_args(argc, argv);
+
         path_t infile = path_t(program.get<std::string>("input"));
         path_t outdir = path_t(program.get<std::string>("-o"));
-        path_t outfile = outdir / ("boxed_" + infile.filename().native());
 
-        std::cout << "infile " << infile << "\n"
-                            << "outfile " << outfile << std::endl;
+        std::function<path_t(const path_t &)> in2out = [=](const path_t &inf) -> path_t {
+            return outdir / ("boxed_" + inf.filename().native());
+        };
+        std::vector<path_t> paths;
 
-        processImage(nppStreamCtx, infile, outfile);
+        if (program["--dir"] == false) {
+            paths.push_back(infile);
+        } else {
+            for (const auto &entry : diriter_t(infile)) {
+                if (not entry.is_regular_file()) {
+                    continue;
+                }
+                paths.push_back(entry);
+            }
+        }
+
+        ImageProcessData data;
+        data.nppStreamCtx = nppStreamCtx;
+        for (const auto &image : paths) {
+            processImage(data, image.native(), in2out(image).native());
+        }
         closeNPPLib(nppStreamCtx);
     }
     catch (npp::Exception &rException) {
