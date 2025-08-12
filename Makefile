@@ -302,13 +302,13 @@ endif
 images/input:
 	mkdir -p $@
 
-images/input/6.1.01.pgm: | images/input
+images/input/6.1.01.pgm: images/images.tar.gz | images/input
 	tar xf $< -C $|
 
 images: images/input/6.1.01.pgm
 
 clean_images:
-	rm -rf images/input
+	rm -rf images/input images/output
 
 appname := edge_detect.x
 sources := edge_detect.cpp
@@ -335,7 +335,10 @@ test: build Lena.pgm
 	./$(appname) Lena.pgm
 
 test_dir: build images
-	./$(appname) --dir images/input
+	mkdir -p images/output
+	./$(appname) -o images/output --batch 8 --dir images/input
 
 clean:
 	rm -f $(appname) $(objs)
+
+distclean: clean clean_images

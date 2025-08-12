@@ -56,20 +56,16 @@ void processNPPResult(NppStatus status, int lineno)
     LOG_ERR(status > 0, "Line " << lineno << " Got NPP warning " << status);
 }
 
-
 using path_t = std::filesystem::path;
 
 int cudaDeviceInit(cudaDeviceProp &deviceProp)
 {
     int deviceCount;
     CHECK_CUDA_ERR(cudaGetDeviceCount(&deviceCount));
-
     LOG_ERR(deviceCount == 0, "CUDA error: no devices supporting CUDA.");
     const int dev = 0;
     std::cout << "Selecting CUDA device " << dev << " by default" << std::endl;
-
     cudaGetDeviceProperties(&deviceProp, dev);
-
     CHECK_CUDA_ERR(cudaSetDevice(dev));
 
     int driverVersion, runtimeVersion;
@@ -132,7 +128,7 @@ struct ImageProcessData
 void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, const Npp8u *pSrc, size_t nSrcPitch, size_t nWidth, size_t nHeight, cudaStream_t stream)
 {
     CHECK_CUDA_ERR(cudaMemcpy2DAsync(pDst, nDstPitch, pSrc, nSrcPitch, nWidth * sizeof(Npp8u), nHeight, cudaMemcpyDeviceToHost, stream));
-};
+}
 
 void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, npp::ImageNPP_8u_C1 &oDeviceSrc, cudaStream_t stream)
 {
@@ -168,7 +164,6 @@ void computeData(ImageProcessData &data) {
 
     NppiSize oSrcSize = {(int)data.oDeviceSrc.width(), (int)data.oDeviceSrc.height()};
     NppiPoint oSrcOffset = {0, 0};
-
     const Npp16s nLowThreshold = 72;
     const Npp16s nHighThreshold = 256;
 
@@ -258,7 +253,7 @@ int main(int argc, char *argv[])
         cudaDeviceProp deviceProp;
         cudaDeviceInit(deviceProp);
 
-        argparse::ArgumentParser program("edge_detect");
+        argparse::ArgumentParser program("edge_detect", "1.0", argparse::default_arguments::help);
         program.add_argument("-o")
             .default_value(".")
             .help("output file or directory (depending on input)");
@@ -275,12 +270,10 @@ int main(int argc, char *argv[])
 
         path_t infile = path_t(program.get<std::string>("input"));
         path_t outdir = path_t(program.get<std::string>("-o"));
-
-        std::function<path_t(const path_t &)> in2out = [=](const path_t &inf) -> path_t {
+        std::function<path_t(const path_t &)> in2out = [=](const path_t &inf) {
             return outdir / ("boxed_" + inf.filename().native());
         };
         std::vector<path_t> paths;
-
         if (program["--dir"] == false) {
             paths.push_back(infile);
         } else {
@@ -293,10 +286,12 @@ int main(int argc, char *argv[])
             static_cast<unsigned>(deviceProp.concurrentKernels), // could be 0
             1U);
         const unsigned concurrency = program.present<unsigned>("--batch").value_or(concurrentKernels);
-        std::cout << "concurrency " << concurrency << std::endl;
+        std::cout << "Concurrency: " << concurrency << std::endl;
 
         std::vector<ImageProcessData> data(concurrency * 2);
+        std::cout << "Starting processing " << paths.size() << " images..." << std::endl;
         processImageDoubleBuffered(paths, data, in2out);
+        std::cout << "Processing completed." << std::endl;
     }
     catch (npp::Exception &rException) {
         LOG_ERR(true, "Program error! An NPP exception occurred: \n" << rException);
