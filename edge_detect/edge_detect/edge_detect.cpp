@@ -246,13 +246,8 @@ int main(int argc, char *argv[])
     using dirent_t = std::filesystem::directory_entry;
     using diriter_t = std::filesystem::directory_iterator;
 
-    std::cout << argv[0] << " Starting...\n\n";
-
     try
     {
-        cudaDeviceProp deviceProp;
-        cudaDeviceInit(deviceProp);
-
         argparse::ArgumentParser program("edge_detect", "1.0", argparse::default_arguments::help);
         program.add_argument("-o")
             .default_value(".")
@@ -282,6 +277,8 @@ int main(int argc, char *argv[])
                 std::back_inserter(paths), [](const dirent_t &e) { return e.is_regular_file(); });
         }
 
+        cudaDeviceProp deviceProp;
+        cudaDeviceInit(deviceProp);
         const unsigned concurrentKernels = std::max(
             static_cast<unsigned>(deviceProp.concurrentKernels), // could be 0
             1U);
