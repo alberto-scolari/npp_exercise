@@ -5,22 +5,24 @@
 #pragma warning(disable : 4819)
 #endif
 
+// clang-format off
+#include <cstring>
 #include <ImageIO.h>
 #include <ImagesCPU.h>
 #include <ImagesNPP.h>
+// clang-format on
 #include <cuda_runtime.h>
 #include <npp.h>
-#include <string.h>
 
 #include <algorithm>
 #include <argparse/argparse.hpp>
+#include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <functional>
 #include <iostream>
-#include <optional>
 #include <string>
 #include <vector>
+#include <tuple>
 
 #define CHECK_CUDA_ERR(fcall)                                             \
   if (cudaError_t err = (fcall); err != cudaError_t::cudaSuccess) {       \
@@ -44,19 +46,26 @@ constexpr bool DO_LOG = false;
     std::exit(EXIT_FAILURE);        \
   }
 
-void processNPPResult(NppStatus, int);
+static void processNPPResult(NppStatus, int);
 
 #define CHECK_NPP_ERR(fcall) processNPPResult((fcall), __LINE__)
 
-void processNPPResult(NppStatus status, int lineno) {
+static void processNPPResult(NppStatus status, int lineno) {
   LOG_ERR(status < 0, "Line " << lineno << " Got NPP error " << status);
   LOG_ERR(status > 0, "Line " << lineno << " Got NPP warning " << status);
 }
 
 using path_t = std::filesystem::path;
 
-int cudaDeviceInit(cudaDeviceProp &deviceProp) {
-  int deviceCount;
+constexpr std::tuple<int, int> getMajorMinor(int ver) {
+  constexpr int MAJOR_DIV = 1000;
+  constexpr int MINOR_DIV = 10;
+  constexpr int MINOR_MOD = 100;
+  return {ver / MAJOR_DIV, (ver % MINOR_MOD) / MINOR_DIV};
+}
+
+static int cudaDeviceInit(cudaDeviceProp &deviceProp) {
+  int deviceCount = -1;
   CHECK_CUDA_ERR(cudaGetDeviceCount(&deviceCount));
   LOG_ERR(deviceCount == 0, "CUDA error: no devices supporting CUDA.");
   const int dev = 0;
@@ -64,17 +73,18 @@ int cudaDeviceInit(cudaDeviceProp &deviceProp) {
   cudaGetDeviceProperties(&deviceProp, dev);
   CHECK_CUDA_ERR(cudaSetDevice(dev));
 
-  int driverVersion, runtimeVersion;
+  int driverVersion = -1;
   cudaDriverGetVersion(&driverVersion);
+  auto [dmajor, dminor] = getMajorMinor(driverVersion);
+  std::cout << "CUDA Driver Version: " << dmajor << '.' << dminor << std::endl;
+  int runtimeVersion = -1;
   cudaRuntimeGetVersion(&runtimeVersion);
-  std::cout << "CUDA Driver Version: " << (driverVersion / 1000) << '.'
-            << ((driverVersion % 100) / 10) << std::endl;
-  std::cout << "CUDA Runtime Version: " << (runtimeVersion / 1000) << ' '
-            << ((runtimeVersion % 100) / 10) << std::endl;
+  auto [ rmajor, rminor ] = getMajorMinor(runtimeVersion);
+  std::cout << "CUDA Runtime Version: " << rmajor << ' ' << rminor << std::endl;
   return dev;
 }
 
-void initNPPLib(NppStreamContext &nppStreamCtx) {
+static void initNPPLib(NppStreamContext &nppStreamCtx) {
   CHECK_CUDA_ERR(cudaGetDevice(&nppStreamCtx.nCudaDeviceId));
   CHECK_CUDA_ERR(cudaDeviceGetAttribute(
       &nppStreamCtx.nCudaDevAttrComputeCapabilityMajor,
@@ -111,6 +121,8 @@ struct ImageProcessData {
 
   ImageProcessData(const ImageProcessData &) = delete;
 
+  ImageProcessData& operator=(const ImageProcessData &) = delete;
+
   ~ImageProcessData() {
     if (pScratchBufferNPP != nullptr) {
       CHECK_CUDA_ERR(cudaFree(pScratchBufferNPP));
@@ -122,7 +134,7 @@ struct ImageProcessData {
   }
 };
 
-void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, const Npp8u *pSrc,
+static void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, const Npp8u *pSrc,
                              size_t nSrcPitch, size_t nWidth, size_t nHeight,
                              cudaStream_t stream) {
   CHECK_CUDA_ERR(cudaMemcpy2DAsync(pDst, nDstPitch, pSrc, nSrcPitch,
@@ -130,15 +142,15 @@ void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, const Npp8u *pSrc,
                                    cudaMemcpyDeviceToHost, stream));
 }
 
-void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch,
-                             npp::ImageNPP_8u_C1 &oDeviceSrc,
-                             cudaStream_t stream) {
+static void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch,
+                                    npp::ImageNPP_8u_C1 &oDeviceSrc,
+                                    cudaStream_t stream) {
   DeviceToHostCopy2DAsync(pDst, nDstPitch, oDeviceSrc.data(),
                           oDeviceSrc.pitch(), oDeviceSrc.width(),
                           oDeviceSrc.height(), stream);
 }
 
-void initData(ImageProcessData &data, const std::string &input) {
+static void initData(ImageProcessData &data, const std::string &input) {
   npp::loadImage(input, data.oHostSrc);
   // declare a device image and copy construct from the host image,
   // i.e. upload host to device
@@ -152,9 +164,10 @@ void initData(ImageProcessData &data, const std::string &input) {
   data.oSizeROI = {(int)data.oDeviceSrc.width(), (int)data.oDeviceSrc.height()};
 }
 
-void computeData(ImageProcessData &data) {
+static void computeData(ImageProcessData &data) {
   // get necessary scratch buffer size and allocate that much device memory
-  int old_size = data.nBufferSize, new_size;
+  int old_size = data.nBufferSize;
+  int new_size;
   CHECK_NPP_ERR(nppiFilterCannyBorderGetBufferSize(data.oSizeROI, &new_size));
 
   if (old_size < new_size) {
@@ -186,22 +199,15 @@ void computeData(ImageProcessData &data) {
                           data.oDeviceDst, data.nppStreamCtx.hStream);
 }
 
-void outputData(ImageProcessData &data, const std::string &output) {
+static void outputData(ImageProcessData &data, const std::string &output) {
   CHECK_CUDA_ERR(cudaStreamSynchronize(data.nppStreamCtx.hStream));
   saveImage(output, data.oHostDst);
   LOG("Saved image: " << output);
 }
 
-void processImage(ImageProcessData &data, const std::string &input,
-                  const std::string &output) {
-  initData(data, input);
-  computeData(data);
-  outputData(data, output);
-}
-
-void processImageDoubleBuffered(const std::vector<path_t> &inputs,
-                                std::vector<ImageProcessData> &data,
-                                std::function<path_t(const path_t &)> in2out) {
+static void processImageDoubleBuffered(
+    const std::vector<path_t> &inputs, std::vector<ImageProcessData> &data,
+    std::function<path_t(const path_t &)> in2out) {
   const int num_files = static_cast<int>(inputs.size());
   const int batch_size = static_cast<int>(data.size() / 2);
   const int num_batches =
