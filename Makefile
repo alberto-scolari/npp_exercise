@@ -302,6 +302,9 @@ endif
 clang-format:
 	@clang-format -i $$(find edge_detect -iname '*.h' -o -iname '*.cpp')
 
+clang-tidy:
+	clang-tidy $$(find edge_detect -iname '*.h' -o -iname '*.cpp')
+
 images/input:
 	mkdir -p $@
 
