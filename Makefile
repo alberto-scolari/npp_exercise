@@ -297,13 +297,15 @@ else
 endif
 
 
-.PHONY: deploy_images clean_images clean
+.PHONY: images clean_images clean
 
 images/input:
 	mkdir -p $@
 
-deploy_images: images/images.tar.gz | images/input
+images/input/6.1.01.pgm: | images/input
 	tar xf $< -C $|
+
+images: images/input/6.1.01.pgm
 
 clean_images:
 	rm -rf images/input
@@ -329,8 +331,11 @@ $(appname): $(objs)
 
 build: $(appname)
 
-test: build
+test: build Lena.pgm
 	./$(appname) Lena.pgm
+
+test_dir: build images
+	./$(appname) --dir images/input
 
 clean:
 	rm -f $(appname) $(objs)
