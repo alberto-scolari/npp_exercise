@@ -58,8 +58,12 @@ Optional arguments:
   --dir       input is a directory
 ```
 
-## Code structure and organization
+## Proof of execution
+If you run `make test_dir`, you obtain the following
 
+![result of execution of target test_dir](docs/test_dir_results.png)
+
+## Code structure and organization
 The structure of the repository follows the [C++ Canonical Project Structure](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1204r0.html).
 
 The code is formatted via `make clang-format` and checked via `make clang-tidy`.
