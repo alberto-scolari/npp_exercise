@@ -285,8 +285,8 @@ int main(int argc, char *argv[])
             paths.push_back(infile);
         } else {
             diriter_t indir(infile);
-            std::copy_if(begin(indir), end(indir), std::back_inserter(paths),
-                         [](const dirent_t &e) { return e.is_regular_file(); });
+            std::copy_if(std::filesystem::begin(indir), std::filesystem::end(indir),
+                std::back_inserter(paths), [](const dirent_t &e) { return e.is_regular_file(); });
         }
 
         const unsigned concurrentKernels = std::max(

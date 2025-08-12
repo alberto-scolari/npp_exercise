@@ -323,7 +323,7 @@ INCLUDES += -Ideps/argparse/
 deps/argparse/argparse/argparse.hpp: | deps/argparse/argparse
 	wget -P deps/argparse/argparse/ https://raw.githubusercontent.com/p-ranav/argparse/refs/tags/v3.2/include/argparse/argparse.hpp
 
-%.o: %.cpp deps/argparse/argparse/argparse.hpp
+%.o: edge_detect/edge_detect/%.cpp deps/argparse/argparse/argparse.hpp
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
 $(appname): $(objs)
