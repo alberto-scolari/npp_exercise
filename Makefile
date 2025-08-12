@@ -297,7 +297,10 @@ else
 endif
 
 
-.PHONY: images clean_images clean
+.PHONY: images clean_images clean clang-format
+
+clang-format:
+	@clang-format -i $$(find edge_detect -iname '*.h' -o -iname '*.cpp')
 
 images/input:
 	mkdir -p $@
