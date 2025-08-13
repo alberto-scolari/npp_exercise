@@ -1,3 +1,7 @@
+/// @file edge_detect.cpp
+/// Full implementation of Canny Border Filter with double buffering via CUDA streams.
+
+
 #if defined(WIN32) || defined(_WIN32) || defined(WIN64) || defined(_WIN64)
 #define WINDOWS_LEAN_AND_MEAN
 #define NOMINMAX
@@ -24,6 +28,10 @@
 #include <tuple>
 #include <vector>
 
+/* UTILITIES FOR ERROR HANDLING AND LOGGING */
+
+/// @brief check for a CUDA error as a result from a function call; if error,
+///   warn and terminate
 #define CHECK_CUDA_ERR(fcall)                                             \
   if (cudaError_t err = (fcall); err != cudaError_t::cudaSuccess) {       \
     std::cerr << "Line " << __LINE__ << " Got CUDA error " << err << " "  \
@@ -32,22 +40,29 @@
     std::exit(EXIT_FAILURE);                                              \
   }
 
-// enable before compiling to log batched execution
+/// @brief enable before compiling to log batched execution
 constexpr bool DO_LOG = false;
 
+/// @brief print args as stream inputs
 #define LOG(args)                   \
   if (DO_LOG) {                     \
     std::cout << args << std::endl; \
   }
 
+/// @brief if condition @p cond is met, print args as stream inputs into stderr
+///   and exit abnormally
 #define LOG_ERR(cond, args)         \
   if ((cond)) {                     \
     std::cerr << args << std::endl; \
     std::exit(EXIT_FAILURE);        \
   }
 
+/// @brief check the result of a call to a routing of the NPP lib: in case of
+///   error, report it and the given line number
+// forward declaration for processNPPResult().
 static void processNPPResult(NppStatus, int);
 
+/// @brief check the result of a call to a routing of the NPP lib
 #define CHECK_NPP_ERR(fcall) processNPPResult((fcall), __LINE__)
 
 static void processNPPResult(NppStatus status, int lineno) {
@@ -55,8 +70,11 @@ static void processNPPResult(NppStatus status, int lineno) {
   LOG_ERR(status > 0, "Line " << lineno << " Got NPP warning " << status);
 }
 
+/// @brief shorter declaration for filesystem path objects
 using path_t = std::filesystem::path;
 
+/// @brief split a CUDA-encoded version number into major and minor
+/// @param ver CUDA-encoded version number
 constexpr std::tuple<int, int> getMajorMinor(int ver) {
   constexpr int MAJOR_DIV = 1000;
   constexpr int MINOR_DIV = 10;
@@ -64,6 +82,12 @@ constexpr std::tuple<int, int> getMajorMinor(int ver) {
   return {ver / MAJOR_DIV, (ver % MINOR_MOD) / MINOR_DIV};
 }
 
+/* ROUTINES FOR CUDA AND NPP INITIALIZATION */
+
+/// @brief initialize a CUDA device by selecting it
+/// @param deviceProp reference of `cudaDeviceProp` object to store device
+/// information into
+/// @return 0-based index of initialized device
 static int cudaDeviceInit(cudaDeviceProp &deviceProp) {
   int deviceCount = -1;
   CHECK_CUDA_ERR(cudaGetDeviceCount(&deviceCount));
@@ -84,6 +108,9 @@ static int cudaDeviceInit(cudaDeviceProp &deviceProp) {
   return dev;
 }
 
+/// @brief initialize the NPP library
+/// @param nppStreamCtx reference to `NppStreamContext` object to store NPP
+/// information into
 static void initNPPLib(NppStreamContext &nppStreamCtx) {
   CHECK_CUDA_ERR(cudaGetDevice(&nppStreamCtx.nCudaDeviceId));
   CHECK_CUDA_ERR(cudaDeviceGetAttribute(
@@ -102,6 +129,10 @@ static void initNPPLib(NppStreamContext &nppStreamCtx) {
   nppStreamCtx.nSharedMemPerBlock = oDeviceProperties.sharedMemPerBlock;
 }
 
+/* DATA STRUCTURES AND ROUTINES FOR DOUBLE BUFFERING */
+
+/// @brief data structure to track all objects and information needed to
+///   process an image across all phases
 struct ImageProcessData {
   NppStreamContext nppStreamCtx;
   npp::ImageCPU_8u_C1 oHostSrc;
@@ -112,6 +143,7 @@ struct ImageProcessData {
   Npp8u *pScratchBufferNPP = nullptr;
   npp::ImageCPU_8u_C1 oHostDst;
 
+  /// @brief constructs and object by creating a new CUDA stream
   ImageProcessData() {
     initNPPLib(this->nppStreamCtx);
     CHECK_CUDA_ERR(cudaStreamCreate(&nppStreamCtx.hStream));
@@ -123,6 +155,21 @@ struct ImageProcessData {
 
   ImageProcessData &operator=(const ImageProcessData &) = delete;
 
+  /// @brief ensures the internal buffer for CUDA input data is big enough to
+  /// accomodate @p new_size bytes
+  void ensureScratchBufferNPPSize(int new_size) {
+    if (nBufferSize >= new_size) {
+      return;
+    }
+    if (nBufferSize > 0) {
+      CHECK_CUDA_ERR(cudaFreeAsync(pScratchBufferNPP, nppStreamCtx.hStream));
+    }
+    nBufferSize = new_size;
+    CHECK_CUDA_ERR(cudaMallocAsync((void **)&pScratchBufferNPP, new_size,
+                                   nppStreamCtx.hStream));
+  }
+
+  /// @brief destructs an object by releasing the CUDA stream
   ~ImageProcessData() {
     if (pScratchBufferNPP != nullptr) {
       CHECK_CUDA_ERR(cudaFree(pScratchBufferNPP));
@@ -134,6 +181,8 @@ struct ImageProcessData {
   }
 };
 
+/// @brief asynchronous CUDA 2D memcpy between source and destination raw
+/// addresses
 static void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch,
                                     const Npp8u *pSrc, size_t nSrcPitch,
                                     size_t nWidth, size_t nHeight,
@@ -143,14 +192,19 @@ static void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch,
                                    cudaMemcpyDeviceToHost, stream));
 }
 
+/// @brief asynchronous CUDA 2D memcpy between `npp::ImageNPP_8u_C1` source and
+///   destination as raw addresse
 static void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch,
-                                    npp::ImageNPP_8u_C1 &oDeviceSrc,
+                                    const npp::ImageNPP_8u_C1 &oDeviceSrc,
                                     cudaStream_t stream) {
   DeviceToHostCopy2DAsync(pDst, nDstPitch, oDeviceSrc.data(),
                           oDeviceSrc.pitch(), oDeviceSrc.width(),
                           oDeviceSrc.height(), stream);
 }
 
+/// @brief load image from file into buffer data structure
+/// @param data the destination buffer
+/// @param input the path to the image
 static void initData(ImageProcessData &data, const std::string &input) {
   npp::loadImage(input, data.oHostSrc);
   // declare a device image and copy construct from the host image,
@@ -165,22 +219,16 @@ static void initData(ImageProcessData &data, const std::string &input) {
   data.oSizeROI = {(int)data.oDeviceSrc.width(), (int)data.oDeviceSrc.height()};
 }
 
+/// @brief run the computation asynchronously on a single image to the CUDA
+///   device: send data, compute and load results into main memory buffer (all
+///   async)
+/// @param data the buffer with input and output data
 static void computeData(ImageProcessData &data) {
-  // get necessary scratch buffer size and allocate that much device memory
+  // get necessary scratch buffer size and allocate device memory if needed
   int old_size = data.nBufferSize;
   int new_size;
   CHECK_NPP_ERR(nppiFilterCannyBorderGetBufferSize(data.oSizeROI, &new_size));
-
-  if (old_size < new_size) {
-    if (old_size > 0) {
-      CHECK_CUDA_ERR(
-          cudaFreeAsync(data.pScratchBufferNPP, data.nppStreamCtx.hStream));
-    }
-    data.nBufferSize = new_size;
-    CHECK_CUDA_ERR(cudaMallocAsync((void **)&data.pScratchBufferNPP, new_size,
-                                   data.nppStreamCtx.hStream));
-  }
-
+  data.ensureScratchBufferNPPSize(new_size);
   NppiSize oSrcSize = {(int)data.oDeviceSrc.width(),
                        (int)data.oDeviceSrc.height()};
   NppiPoint oSrcOffset = {0, 0};
@@ -200,12 +248,25 @@ static void computeData(ImageProcessData &data) {
                           data.oDeviceDst, data.nppStreamCtx.hStream);
 }
 
+/// @brief store the image into a file
+/// @param data buffer with output data
+/// @param output path to output file
 static void outputData(ImageProcessData &data, const std::string &output) {
+  // first make sure data has arrived into main memory; if not, wait until it's
+  // come
   CHECK_CUDA_ERR(cudaStreamSynchronize(data.nppStreamCtx.hStream));
+  // then store into file
   saveImage(output, data.oHostDst);
   LOG("Saved image: " << output);
 }
 
+/// @brief **double-buffered implementation** of the load-process-store
+/// pipeline:
+///   handles batching, issuing of operations and buffer swapping
+/// @param inputs vector if input images
+/// @param data vector of buffers (for both LOAD-PROCESS and STORE)
+/// @param in2out functor to compute the output path from the input path for
+///   each image
 static void processImageDoubleBuffered(
     const std::vector<path_t> &inputs, std::vector<ImageProcessData> &data,
     std::function<path_t(const path_t &)> in2out) {
@@ -252,11 +313,16 @@ static void processImageDoubleBuffered(
   }
 }
 
+/* ENTRY POINT: PARSE CMDLINE, SETUP AND RUN */
+
+/// @brief main function for the executable: get cmdline args, set things up and
+///   run the computation
 int main(int argc, char *argv[]) {
   using dirent_t = std::filesystem::directory_entry;
   using diriter_t = std::filesystem::directory_iterator;
 
   try {
+    // first parse arguments from command line
     argparse::ArgumentParser program("edge_detect", "1.0",
                                      argparse::default_arguments::help);
     program.add_argument("-o").default_value(".").help(
@@ -273,33 +339,43 @@ int main(int argc, char *argv[]) {
 
     path_t infile = path_t(program.get<std::string>("input"));
     path_t outdir = path_t(program.get<std::string>("-o"));
+    // create functor to give output paths
     std::function<path_t(const path_t &)> in2out = [=](const path_t &inf) {
       return outdir / ("boxed_" + inf.filename().native());
     };
+    // store all input images into vector
     std::vector<path_t> paths;
     if (program["--dir"] == false) {
+      // cmdline input is file
       paths.push_back(infile);
     } else {
+      // cmdline input if folder: navigate all stored file
       diriter_t indir(infile);
       std::copy_if(std::filesystem::begin(indir), std::filesystem::end(indir),
                    std::back_inserter(paths),
                    [](const dirent_t &e) { return e.is_regular_file(); });
     }
 
+    // initialize CUDA device and NPP lib
     cudaDeviceProp deviceProp;
     cudaDeviceInit(deviceProp);
+
+    // initialize concurrency value from hardware or user's input
     const unsigned concurrentKernels = std::max(
         static_cast<unsigned>(deviceProp.concurrentKernels),  // could be 0
-        1U);
+        1U);  // must be at least 1
     const unsigned concurrency =
         program.present<unsigned>("--batch").value_or(concurrentKernels);
     std::cout << "Concurrency: " << concurrency << std::endl;
 
+    // initialize memory buffers for double buffering (hence * 2 below)
     std::vector<ImageProcessData> data(concurrency * 2);
+    // start pushing tasks to device
     std::cout << "Starting processing " << paths.size() << " images..."
               << std::endl;
     processImageDoubleBuffered(paths, data, in2out);
     std::cout << "Processing completed." << std::endl;
+
   } catch (npp::Exception &rException) {
     LOG_ERR(true, "Program error! An NPP exception occurred: \n" << rException);
   } catch (const std::exception &err) {
@@ -308,6 +384,5 @@ int main(int argc, char *argv[]) {
     LOG_ERR(true,
             "Program error! An unknow type of exception occurred.\nAborting.");
   }
-
   return 0;
 }

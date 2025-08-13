@@ -297,13 +297,28 @@ else
 endif
 
 
-.PHONY: images clean_images clean clang-format
+.PHONY: images clean_images clean clang-format doxygen _doxyecho clean_doxy
 
 clang-format:
 	@clang-format -i $$(find edge_detect -iname '*.h' -o -iname '*.cpp')
 
 clang-tidy:
 	clang-tidy $$(find edge_detect -iname '*.h' -o -iname '*.cpp')
+
+doxyindex := docs/html/index.html
+
+$(doxyindex):
+	doxygen .Doxyfile
+
+_doxyecho:
+	@echo
+	@echo "Doxygen documentation generated in $(doxyindex)"
+	@echo
+
+doxygen: $(doxyindex) _doxyecho
+
+clean_doxy:
+	rm -rf docs/html
 
 images/input:
 	mkdir -p $@
@@ -347,4 +362,4 @@ test_dir: build images
 clean:
 	rm -f $(appname) $(objs)
 
-distclean: clean clean_images
+distclean: clean clean_images clean_doxy

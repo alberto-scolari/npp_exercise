@@ -60,6 +60,14 @@ Optional arguments:
   --dir       input is a directory
 ```
 
+To generate the code documentation (via [doxygen](https://www.doxygen.nl)) run
+
+```bash
+make doxygen
+```
+
+which will produce it in HTML format, with home at `docs/html/index.html`.
+
 ## Proof of execution
 If you run `make test_dir`, you obtain the following
 
@@ -74,8 +82,8 @@ The code is formatted via `make clang-format` and checked via `make clang-tidy`.
 Processing a single image essentially consists in 3 steps, run in the following order:
 
 1. `LOAD`: loading it from file and initializing the related NPP objects (memory alloactions, data copies, ...);
-2. `PROCESS`: sending the data to the device and running the computation;
-3. `STORE`: copying the result back from the device into main memory and storing it into a file.
+2. `PROCESS`: sending the data to the device, running the computation and loading results into main memory;
+3. `STORE`: storing the result image into a file.
 
 The current implementation runs these steps in a double buffered way, to overlap the operations `LOAD` and `PROCESS` (run together) with 3. Furthermore, multiple operations are sent concurrently to the CUDA device in an asynchronous fashion via CUDA streams, thus leveraging the available parallelism. In particular, the user can control the number of parallel operations via the command-line argument `--batch <BATCH_SIZE>`, where `<BATCH_SIZE>` is the desired batch size, i.e., the number of operations of type `LOAD`-and-`PROCESS` or `STORE` issued to the device. The algorithm is summarised by the following Python-like pseudo code:
 
