@@ -88,28 +88,30 @@ Processing a single image essentially consists in 3 steps, run in the following 
 The current implementation runs these steps in a double buffered way, to overlap the operations `LOAD` and `PROCESS` (run together) with 3. Furthermore, multiple operations are sent concurrently to the CUDA device in an asynchronous fashion via CUDA streams, thus leveraging the available parallelism. In particular, the user can control the number of parallel operations via the command-line argument `--batch <BATCH_SIZE>`, where `<BATCH_SIZE>` is the desired batch size, i.e., the number of operations of type `LOAD`-and-`PROCESS` or `STORE` issued to the device. The algorithm is summarised by the following Python-like pseudo code:
 
 ```python
+# user's inputs
 IMAGES := [0, N) list of N images to be processed
-BATCHES := split IMAGES in groups of at most BATCH_SIZE images
+BATCH_SIZE := size of a single batch
 
-// prologue: send first batch to device
+BATCHES = split IMAGES in groups of at most BATCH_SIZE images
+# prologue: send first batch to device
 BATCH = BATCHES[0]
 for IMAGE in BATCH:
   LOAD(IMAGE)
   PROCESS(IMAGE)
 
-// main loop: process following batches
+# main loop: process following batches
 for BATCH_NUM in [1, len(BATCHES)):
-  // LOAD-PROCESS phase: send new batch
+  # LOAD-PROCESS phase: send new batch
   BATCH = BATCHES[BATCH_NUM]
   for IMAGE in BATCH:
     LOAD(IMAGE)
     PROCESS(IMAGE)
-  // STORE phase: gather result from previous batch and store them
+  # STORE phase: gather result from previous batch and store them
   PREV_BATCH = BATCHES[BATCH_NUM-1]
   for IMAGE in PREV_BATCH:
     STORE(IMAGE)
 
-// epilogue: gather results of last sent batch and store
+# epilogue: gather results of last sent batch and store
 PREV_BATCH = BATCHES[len(BATCHES)-1]
 for IMAGE in PREV_BATCH:
   STORE(IMAGE)
