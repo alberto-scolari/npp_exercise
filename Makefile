@@ -244,7 +244,7 @@ ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
 # Common includes and paths for CUDA
-# INCLUDES  := -I../Common
+INCLUDES  :=
 LIBRARIES :=
 
 ################################################################################
@@ -270,7 +270,12 @@ endif
 
 ALL_CCFLAGS += --threads 0  -Xcompiler -Wall -Xcompiler -Wextra
 
-INCLUDES += -isystem ../Common/UtilNPP
+deps/cuda_samples:
+	mkdir -p $@
+	wget -P deps/cuda_samples https://github.com/NVIDIA/cuda-samples/archive/refs/tags/v13.0.tar.gz
+	tar xf deps/cuda_samples/v13.0.tar.gz -C deps/cuda_samples
+
+INCLUDES += -isystem deps/cuda_samples/cuda-samples-13.0/Common/UtilNPP
 
 LIBRARIES += -lnppisu_static -lnppif_static -lnppc_static -lculibos -lfreeimage
 
@@ -321,10 +326,10 @@ clean_doxy:
 	rm -rf docs/html
 
 images/input:
-	mkdir -p $@
+	@mkdir -p $@
 
-images/input/6.1.01.pgm: images/images.tar.gz | images/input
-	tar xf $< -C $|
+images/input/6.1.01.pgm: images/images.tar.gz images/input
+	@if [ ! -f "$@" ]; then tar xf $< -C images/input; fi;
 
 images: images/input/6.1.01.pgm
 
@@ -338,13 +343,13 @@ objs := $(sources:.cpp=.o)
 deps/argparse/argparse:
 	mkdir -p $@
 
-INCLUDES += -Ideps/argparse/
+INCLUDES += -isystem deps/argparse/
 
 # dowload argparse, which is only one header (MIT license)
 deps/argparse/argparse/argparse.hpp: | deps/argparse/argparse
 	wget -P deps/argparse/argparse/ https://raw.githubusercontent.com/p-ranav/argparse/refs/tags/v3.2/include/argparse/argparse.hpp
 
-%.o: edge_detect/edge_detect/%.cpp deps/argparse/argparse/argparse.hpp
+%.o: edge_detect/edge_detect/%.cpp deps/argparse/argparse/argparse.hpp deps/cuda_samples
 	$(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
 $(appname): $(objs)
