@@ -21,8 +21,8 @@
 #include <functional>
 #include <iostream>
 #include <string>
-#include <vector>
 #include <tuple>
+#include <vector>
 
 #define CHECK_CUDA_ERR(fcall)                                             \
   if (cudaError_t err = (fcall); err != cudaError_t::cudaSuccess) {       \
@@ -79,7 +79,7 @@ static int cudaDeviceInit(cudaDeviceProp &deviceProp) {
   std::cout << "CUDA Driver Version: " << dmajor << '.' << dminor << std::endl;
   int runtimeVersion = -1;
   cudaRuntimeGetVersion(&runtimeVersion);
-  auto [ rmajor, rminor ] = getMajorMinor(runtimeVersion);
+  auto [rmajor, rminor] = getMajorMinor(runtimeVersion);
   std::cout << "CUDA Runtime Version: " << rmajor << ' ' << rminor << std::endl;
   return dev;
 }
@@ -121,7 +121,7 @@ struct ImageProcessData {
 
   ImageProcessData(const ImageProcessData &) = delete;
 
-  ImageProcessData& operator=(const ImageProcessData &) = delete;
+  ImageProcessData &operator=(const ImageProcessData &) = delete;
 
   ~ImageProcessData() {
     if (pScratchBufferNPP != nullptr) {
@@ -134,9 +134,10 @@ struct ImageProcessData {
   }
 };
 
-static void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch, const Npp8u *pSrc,
-                             size_t nSrcPitch, size_t nWidth, size_t nHeight,
-                             cudaStream_t stream) {
+static void DeviceToHostCopy2DAsync(Npp8u *pDst, size_t nDstPitch,
+                                    const Npp8u *pSrc, size_t nSrcPitch,
+                                    size_t nWidth, size_t nHeight,
+                                    cudaStream_t stream) {
   CHECK_CUDA_ERR(cudaMemcpy2DAsync(pDst, nDstPitch, pSrc, nSrcPitch,
                                    nWidth * sizeof(Npp8u), nHeight,
                                    cudaMemcpyDeviceToHost, stream));
