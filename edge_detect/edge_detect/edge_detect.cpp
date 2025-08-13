@@ -225,7 +225,6 @@ static void initData(ImageProcessData &data, const std::string &input) {
 /// @param data the buffer with input and output data
 static void computeData(ImageProcessData &data) {
   // get necessary scratch buffer size and allocate device memory if needed
-  int old_size = data.nBufferSize;
   int new_size;
   CHECK_NPP_ERR(nppiFilterCannyBorderGetBufferSize(data.oSizeROI, &new_size));
   data.ensureScratchBufferNPPSize(new_size);
