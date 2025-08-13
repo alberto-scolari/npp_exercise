@@ -1,9 +1,11 @@
 
 # NPP Exercise
-This is an exercise to show NPP capabilities.
+This is an exercise to show NPP capabilities by applying a [Canny Border Filter](https://docs.nvidia.com/cuda/npp/image_filtering_functions.html#image-filter-canny-border) to one or more input images in PGM format. For each input image, the filter is applied by calling the NPP function [`nppiFilterCannyBorder_8u_C3C1R_Ctx`](https://docs.nvidia.com/cuda/npp/image_filtering_functions.html#c.nppiFilterCannyBorder_8u_C3C1R_Ctx) and the output is stored into a PMG image with the same name and a `boxed_` prefix.
+
+This implementation exploits the available concurrency on a CUDA device by [duble-buffering](https://en.wikipedia.org/wiki/Multiple_buffering) the execution of the various operations. For more details about the double buffering implementation, see [the dedicated section](#double-buffering-implementation).
 
 # Quickstart
-For the basic functionalities, a [`Makefile`](Makefile) is available.
+For the basic functionalities, a [`Makefile`](Makefile) is available. It automatically downloads the dependencies (see [the list of dependencies](#dependencies-and-licenses)) and builds the executable when needed and requires no manual intervention nor extra arguments.
 To compile and run on a single image, you may run
 
 ```bash
@@ -68,7 +70,46 @@ The structure of the repository follows the [C++ Canonical Project Structure](ht
 
 The code is formatted via `make clang-format` and checked via `make clang-tidy`.
 
-## Inspect the output
+### Double buffering implementation
+Processing a single image essentially consists in 3 steps, run in the following order:
+
+1. `LOAD`: loading it from file and initializing the related NPP objects (memory alloactions, data copies, ...);
+2. `PROCESS`: sending the data to the device and running the computation;
+3. `STORE`: copying the result back from the device into main memory and storing it into a file.
+
+The current implementation runs these steps in a double buffered way, to overlap the operations `LOAD` and `PROCESS` (run together) with 3. Furthermore, multiple operations are sent concurrently to the CUDA device in an asynchronous fashion via CUDA streams, thus leveraging the available parallelism. In particular, the user can control the number of parallel operations via the command-line argument `--batch <BATCH_SIZE>`, where `<BATCH_SIZE>` is the desired batch size, i.e., the number of operations of type `LOAD`-and-`PROCESS` or `STORE` issued to the device. The algorithm is summarised by the following Python-like pseudo code:
+
+```python
+IMAGES := [0, N) list of N images to be processed
+BATCHES := split IMAGES in groups of at most BATCH_SIZE images
+
+// prologue: send first batch to device
+BATCH = BATCHES[0]
+for IMAGE in BATCH:
+  LOAD(IMAGE)
+  PROCESS(IMAGE)
+
+// main loop: process following batches
+for BATCH_NUM in [1, len(BATCHES)):
+  // LOAD-PROCESS phase: send new batch
+  BATCH = BATCHES[BATCH_NUM]
+  for IMAGE in BATCH:
+    LOAD(IMAGE)
+    PROCESS(IMAGE)
+  // STORE phase: gather result from previous batch and store them
+  PREV_BATCH = BATCHES[BATCH_NUM-1]
+  for IMAGE in PREV_BATCH:
+    STORE(IMAGE)
+
+// epilogue: gather results of last sent batch and store
+PREV_BATCH = BATCHES[len(BATCHES)-1]
+for IMAGE in PREV_BATCH:
+  STORE(IMAGE)
+```
+
+Keeping track of in-flight operations requires intermediate data structures: `<BATCH_SIZE>` data structures are written in the *LOAD-PROCESS phase* (iteration `BATCH_NUM`) to keep track of images sent to the device for processing; `<BATCH_SIZE>` data structures are read during the *STORE phase*, to gather the results of the previous LOAD-PROCESS phase (iteration `BATCH_NUM-1`) and store them on disk. At the end of each `BATCH_NUM` iteration, these data structures are swapped, so that the first group of them (written in the *LOAD-PROCESS phase*) is read during the following *STORE phase* and the second group (read in the *STORE phase* and thus not needed anymore) is re-used in the following *LOAD-PROCESS phase*.
+
+## Inspecting the output
 To inspect the output, you may want to convert it from PGM to PNG using [ImageMagick](https://imagemagick.org)
 
 ```bash
