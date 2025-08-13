@@ -69,9 +69,11 @@ make doxygen
 which will produce it in HTML format, with home at `docs/html/index.html`.
 
 ## Proof of execution
-If you run `make test_dir`, you obtain the following
+If you run `make test_dir`, you may see the following
 
 ![result of execution of target test_dir](docs/test_dir_results.png)
+
+At the beginning you see the compilation and the run commands, while at the end you see the output images in `images/output`, whose names correspond to the input images (middle `ls images/input` command) with a `boxed_` prefix.
 
 ## Code structure and organization
 The structure of the repository follows the [C++ Canonical Project Structure](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1204r0.html).
